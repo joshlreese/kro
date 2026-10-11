@@ -45,6 +45,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/runtime"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/watchrouter"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/pkg/tracing"
 )
 
 // defaultApplyConcurrency is the default concurrency limit for parallel
@@ -267,10 +268,19 @@ func (s *Simple) Apply(ctx context.Context, rt *runtime.Runtime, w watchrouter.W
 	ready := make(map[string]bool, len(rt.Nodes()))
 
 	for _, n := range rt.Nodes() {
+		nodeCtx, span := tracing.StartNodeSpan(ctx, s.qualifiedPath(n.ID()), n.Kind().String())
+		recordNodeWaiting := func(err error) {
+			tracing.EndSpan(span, err, ErrNotReady, "waiting")
+			recordSoft(err)
+		}
+		recordNodeError := func(err error) {
+			tracing.EndSpan(span, err, nil, "error")
+			recordHard(err)
+		}
 		if s.GateReadiness {
 			if dep, blocked := firstUnreadyDep(n, ready); blocked {
 				result.Unresolved = append(result.Unresolved, n.ID())
-				recordSoft(fmt.Errorf("apply %q: waiting for dependency %q: %w", n.ID(), dep, ErrNotReady))
+				recordNodeWaiting(fmt.Errorf("apply %q: waiting for dependency %q: %w", n.ID(), dep, ErrNotReady))
 				continue
 			}
 		}
@@ -283,13 +293,14 @@ func (s *Simple) Apply(ctx context.Context, rt *runtime.Runtime, w watchrouter.W
 				// so identities are unknown — caller preserves the
 				// previous entries for this NodeID.
 				result.Unresolved = append(result.Unresolved, n.ID())
-				recordSoft(fmt.Errorf("apply %q: includeWhen: %w (%w)", n.ID(), err, ErrNotReady))
+				recordNodeWaiting(fmt.Errorf("apply %q: includeWhen: %w (%w)", n.ID(), err, ErrNotReady))
 				continue
 			}
-			recordHard(fmt.Errorf("apply %q: %w", n.ID(), err))
+			recordNodeError(fmt.Errorf("apply %q: %w", n.ID(), err))
 			continue
 		}
 		if ignored {
+			tracing.EndSpan(span, nil, nil, "skipped")
 			// Intentionally skipped — not Unresolved. The caller
 			// will treat any previous entries for this NodeID as
 			// prune candidates. Ignored nodes are non-blocking for
@@ -302,19 +313,20 @@ func (s *Simple) Apply(ctx context.Context, rt *runtime.Runtime, w watchrouter.W
 		// Program in a scope seeded from this one. Handle it before
 		// Resolve (which would deref the nil Object).
 		if n.Kind() == compiler.NodeKindGraph {
-			applied, unresolved, contribs, err := s.applySubgraph(ctx, rt, w, n)
+			applied, unresolved, contribs, err := s.applySubgraph(nodeCtx, rt, w, n)
 			result.Applied = append(result.Applied, applied...)
 			result.Unresolved = append(result.Unresolved, unresolved...)
 			result.Contributions = append(result.Contributions, contribs...)
 			if err != nil {
 				if errors.Is(err, ErrNotReady) || isSoftRuntimeErr(err) {
-					recordSoft(fmt.Errorf("apply %q (subgraph): %w", n.ID(), err))
+					recordNodeWaiting(fmt.Errorf("apply %q (subgraph): %w", n.ID(), err))
 					continue
 				}
-				recordHard(fmt.Errorf("apply %q (subgraph): %w", n.ID(), err))
+				recordNodeError(fmt.Errorf("apply %q (subgraph): %w", n.ID(), err))
 				continue
 			}
 			ready[n.ID()] = true
+			tracing.EndSpan(span, nil, nil, "ready")
 			continue
 		}
 
@@ -322,20 +334,20 @@ func (s *Simple) Apply(ctx context.Context, rt *runtime.Runtime, w watchrouter.W
 		if err != nil {
 			if isSoftRuntimeErr(err) {
 				result.Unresolved = append(result.Unresolved, n.ID())
-				recordSoft(fmt.Errorf("apply %q: resolve: %w (%w)", n.ID(), err, ErrNotReady))
+				recordNodeWaiting(fmt.Errorf("apply %q: resolve: %w (%w)", n.ID(), err, ErrNotReady))
 				continue
 			}
-			recordHard(fmt.Errorf("apply %q: resolve: %w", n.ID(), err))
+			recordNodeError(fmt.Errorf("apply %q: resolve: %w", n.ID(), err))
 			continue
 		}
 
-		softErr, err := s.applyNodeByKind(ctx, rt, w, n, desired, &result)
+		softErr, err := s.applyNodeByKind(nodeCtx, rt, w, n, desired, &result)
 		if err != nil {
-			recordHard(err)
+			recordNodeError(err)
 			continue
 		}
 		if softErr != nil {
-			recordSoft(softErr)
+			recordNodeWaiting(softErr)
 			continue
 		}
 
@@ -344,14 +356,15 @@ func (s *Simple) Apply(ctx context.Context, rt *runtime.Runtime, w watchrouter.W
 		// so downstream watches still register. Hard → aggregate.
 		if err := n.CheckReadiness(); err != nil {
 			if isSoftRuntimeErr(err) {
-				recordSoft(fmt.Errorf("apply %q: %w (%w)", n.ID(), err, ErrNotReady))
+				recordNodeWaiting(fmt.Errorf("apply %q: %w (%w)", n.ID(), err, ErrNotReady))
 				continue
 			}
-			recordHard(fmt.Errorf("apply %q: %w", n.ID(), err))
+			recordNodeError(fmt.Errorf("apply %q: %w", n.ID(), err))
 			continue
 		}
 		// Node reached a terminal ready state — unblock its dependents.
 		ready[n.ID()] = true
+		tracing.EndSpan(span, nil, nil, "ready")
 	}
 	// A hard error dominates any soft signal — errors.Join preserves errors.Is
 	// for each joined error, and none of the hard errors carry ErrNotReady, so
@@ -743,6 +756,7 @@ func (s *Simple) applyScalarTemplate(ctx context.Context, w watchrouter.Watcher,
 			return applied, fmt.Errorf("template %s %q owned by a peer kro Graph's template manager; refusing to co-manage: %w (%w)",
 				obj.GetKind(), client.ObjectKeyFromObject(obj), ErrFieldManagerConflict, ErrNotReady)
 		}
+		tracing.PropagateTraceContext(ctx, obj, current)
 		if err := s.applyTemplateObject(ctx, obj, rt.Graph().GetUID()); err != nil {
 			// A peer-Graph field conflict is soft not-ready (wrapped with
 			// ErrNotReady) so the node gates its dependents and the reconcile
@@ -1026,6 +1040,7 @@ func (s *Simple) applyCollectionItem(ctx context.Context, rt *runtime.Runtime, n
 		return nil
 	}
 
+	tracing.PropagateTraceContext(ctx, obj, current)
 	if err := s.applyTemplateObject(ctx, obj, rt.Graph().GetUID()); err != nil {
 		// A peer-Graph field conflict is never tolerated as an update-rejection:
 		// record it as a soft failure so the collection is held not-ready and the

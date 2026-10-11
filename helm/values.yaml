@@ -150,6 +150,8 @@ config:
   graphRevisionConcurrentReconciles: 1
   # The number of graph reconciles to run in parallel
   graphConcurrentReconciles: 1
+  # Read Graph trace annotations and add node context to created resources
+  enableTraceContextPropagation: false
   # The maximum duration to wait for the controller manager to gracefully shutdown
   gracefulShutdownTimeout: 60s
   # The number of dynamic controller reconciles to run in parallel

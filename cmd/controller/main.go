@@ -15,12 +15,14 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -77,6 +79,7 @@ func main() {
 		resourceGraphDefinitionConcurrentReconciles int
 		dynamicControllerConcurrentReconciles       int
 		graphConcurrentReconciles                   int
+		enableTraceContextPropagation               bool
 		// dynamic controller rate limiter parameters
 		minRetryDelay time.Duration
 		maxRetryDelay time.Duration
@@ -105,6 +108,8 @@ func main() {
 		controllerServiceAccount      string
 	)
 
+	flag.BoolVar(&enableTraceContextPropagation, "enable-trace-context-propagation", false,
+		"Read Graph trace annotations and propagate node context to created resources.")
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8078", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8079", "The address the probe endpoint binds to.")
 	flag.StringVar(
@@ -219,6 +224,15 @@ func main() {
 	rootLogger := zap.New(zap.UseFlagOptions(&opts))
 	ctrl.SetLogger(rootLogger)
 	klog.SetLogger(rootLogger)
+
+	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
+		setupLog.Error(err, "tracing error")
+	}))
+	shutdownTracing, err := setupTracing(context.Background())
+	if err != nil {
+		setupLog.Error(err, "unable to configure tracing")
+		os.Exit(1)
+	}
 
 	setupLog.Info("feature gates", "knownFeatures", features.FeatureGate.KnownFeatures())
 	if pprofEnabled {
@@ -377,6 +391,7 @@ func main() {
 			applyConcurrency,
 			controllerSA,
 			watchSyncTimeout,
+			enableTraceContextPropagation,
 		); err != nil {
 			setupLog.Error(err, "unable to set up Graph controller")
 			os.Exit(1)
@@ -400,7 +415,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+	managerErr := mgr.Start(ctrl.SetupSignalHandler())
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := shutdownTracing(shutdownCtx); err != nil {
+		setupLog.Error(err, "unable to flush traces")
+	}
+	if err := managerErr; err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}

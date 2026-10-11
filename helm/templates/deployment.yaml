@@ -148,6 +148,9 @@ spec:
             - "$(KRO_RESOURCE_GROUP_CONCURRENT_RECONCILES)"
             - --graph-revision-concurrent-reconciles
             - "$(KRO_GRAPH_REVISION_CONCURRENT_RECONCILES)"
+            {{- if .Values.config.enableTraceContextPropagation }}
+            - --enable-trace-context-propagation
+            {{- end }}
             - --graph-concurrent-reconciles
             - "$(KRO_GRAPH_CONCURRENT_RECONCILES)"
             - --dynamic-controller-concurrent-reconciles

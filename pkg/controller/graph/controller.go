@@ -22,6 +22,7 @@ import (
 	"sync"
 
 	"github.com/go-logr/logr"
+	"go.opentelemetry.io/otel/trace"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -42,6 +43,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/schemawatcher"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/watchrouter"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/pkg/tracing"
 )
 
 // Compiler is the narrow surface the reconciler needs from a Compiler. Kept
@@ -64,6 +66,13 @@ type Compiler interface {
 // compile cache for affected Graphs and enqueues them — the next
 // reconcile recompiles against the fresh schema.
 type Reconciler struct {
+	// Tracer overrides the global tracer for Graph reconciliation.
+	Tracer trace.Tracer
+
+	// EnableTraceContextPropagation reads Graph trace annotations and adds node
+	// context to created resources. It is disabled by default.
+	EnableTraceContextPropagation bool
+
 	Client                  client.Client
 	Compiler                Compiler
 	Registry                *registry.Registry
@@ -121,7 +130,7 @@ func (r *Reconciler) ensureBackoff() {
 // reconcile body, and finally publish status (with a single
 // retry-on-conflict patch). Each path writes its condition via the typed
 // ConditionsMarker — never touches Status.Conditions directly.
-func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, reconcileError error) {
 	r.ensureBackoff()
 	logger := log.FromContext(ctx).WithValues("graph", req.NamespacedName)
 
@@ -132,6 +141,23 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		}
 		return ctrl.Result{}, fmt.Errorf("get graph: %w", err)
 	}
+
+	ctx, span := tracing.StartGraphSpan(ctx, &g, r.Tracer, r.EnableTraceContextPropagation)
+	defer func() {
+		outcome := "ready"
+		for _, condition := range g.Status.Conditions {
+			if condition.Type == expv1alpha1.GraphConditionTypeReady && !condition.IsTrue() {
+				outcome = "not_ready"
+			}
+		}
+		if result.RequeueAfter > 0 {
+			outcome = "waiting"
+		}
+		if !g.DeletionTimestamp.IsZero() {
+			outcome = "deleting"
+		}
+		tracing.EndSpan(span, reconcileError, nil, outcome)
+	}()
 
 	if !g.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, logger, req, &g)

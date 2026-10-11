@@ -54,6 +54,7 @@ func setupGraphController(
 	applyConcurrency int,
 	controllerServiceAccount string,
 	watchSyncTimeout time.Duration,
+	enableTraceContextPropagation bool,
 ) error {
 	router := watchrouter.NewRouter(logger.WithName("graph-watch-router"), watchrouter.Config{
 		SyncTimeout: watchSyncTimeout,
@@ -118,6 +119,8 @@ func setupGraphController(
 		Impersonation:            impersonation,
 		RequireImpersonation:     true,
 		ControllerServiceAccount: controllerServiceAccount,
+
+		EnableTraceContextPropagation: enableTraceContextPropagation,
 	}
 	if err := reconciler.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setup graph reconciler: %w", err)
