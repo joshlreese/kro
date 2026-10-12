@@ -756,7 +756,7 @@ func (s *Simple) applyScalarTemplate(ctx context.Context, w watchrouter.Watcher,
 			return applied, fmt.Errorf("template %s %q owned by a peer kro Graph's template manager; refusing to co-manage: %w (%w)",
 				obj.GetKind(), client.ObjectKeyFromObject(obj), ErrFieldManagerConflict, ErrNotReady)
 		}
-		tracing.PropagateTraceContext(ctx, obj, current)
+		tracing.InjectContext(ctx, obj, current)
 		if err := s.applyTemplateObject(ctx, obj, rt.Graph().GetUID()); err != nil {
 			// A peer-Graph field conflict is soft not-ready (wrapped with
 			// ErrNotReady) so the node gates its dependents and the reconcile
@@ -1040,7 +1040,7 @@ func (s *Simple) applyCollectionItem(ctx context.Context, rt *runtime.Runtime, n
 		return nil
 	}
 
-	tracing.PropagateTraceContext(ctx, obj, current)
+	tracing.InjectContext(ctx, obj, current)
 	if err := s.applyTemplateObject(ctx, obj, rt.Graph().GetUID()); err != nil {
 		// A peer-Graph field conflict is never tolerated as an update-rejection:
 		// record it as a soft failure so the collection is held not-ready and the

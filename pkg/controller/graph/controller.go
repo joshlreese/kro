@@ -142,7 +142,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ct
 		return ctrl.Result{}, fmt.Errorf("get graph: %w", err)
 	}
 
-	ctx, span := tracing.StartGraphSpan(ctx, &g, r.Tracer, r.EnableTraceContextPropagation)
+	ctx, span := tracing.StartReconcileSpan(ctx, &g, r.Tracer, r.EnableTraceContextPropagation)
 	defer func() {
 		outcome := "ready"
 		for _, condition := range g.Status.Conditions {

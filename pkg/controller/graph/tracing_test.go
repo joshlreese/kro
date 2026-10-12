@@ -66,11 +66,14 @@ func TestReconcileTracing(t *testing.T) {
 			spans := recorder.Ended()
 			require.Len(t, spans, 2)
 			require.NotEqual(t, spans[0].SpanContext().SpanID(), spans[1].SpanContext().SpanID())
+			require.NotEqual(t, spans[0].SpanContext().TraceID(), spans[1].SpanContext().TraceID())
 			sc := trace.SpanContextFromContext((propagation.TraceContext{}).Extract(context.Background(), propagation.MapCarrier{"traceparent": parent}))
 			for _, span := range spans {
 				require.Equal(t, "graph.reconcile", span.Name())
-				require.Equal(t, sc.TraceID(), span.SpanContext().TraceID())
-				require.Equal(t, sc.SpanID(), span.Parent().SpanID())
+				require.NotEqual(t, sc.TraceID(), span.SpanContext().TraceID())
+				require.False(t, span.Parent().IsValid())
+				require.Len(t, span.Links(), 1)
+				require.Equal(t, sc, span.Links()[0].SpanContext)
 				if tc.name == "failure" {
 					require.Equal(t, codes.Error, span.Status().Code)
 				} else {

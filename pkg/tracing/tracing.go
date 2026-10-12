@@ -24,6 +24,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	v1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
@@ -43,31 +44,42 @@ type graphTracing struct {
 	propagateAnnotations bool
 }
 
-// StartGraphSpan starts a reconciliation span and optionally reads the parent annotation.
+// ExtractContext reads W3C trace context from resource annotations.
+func ExtractContext(ctx context.Context, obj metav1.Object) context.Context {
+	annotations := obj.GetAnnotations()
+	carrier := propagation.MapCarrier{
+		"traceparent": annotations[TraceParentAnnotation],
+		"tracestate":  annotations[TraceStateAnnotation],
+	}
+	return (propagation.TraceContext{}).Extract(ctx, carrier)
+}
+
+// StartReconcileSpan starts a new reconciliation trace and optionally links to annotated context.
 // A nil tracer uses the global provider configured at controller startup.
-func StartGraphSpan(
+func StartReconcileSpan(
 	ctx context.Context, g *v1alpha1.Graph, tracer trace.Tracer, propagateAnnotations bool,
 ) (context.Context, trace.Span) {
 	if tracer == nil {
 		tracer = otel.Tracer("github.com/kubernetes-sigs/kro/graph")
 	}
+	options := []trace.SpanStartOption{trace.WithNewRoot(), trace.WithSpanKind(trace.SpanKindConsumer)}
 	if propagateAnnotations {
-		carrier := propagation.MapCarrier{
-			"traceparent": g.Annotations[TraceParentAnnotation],
-			"tracestate":  g.Annotations[TraceStateAnnotation],
+		extracted := ExtractContext(context.Background(), g)
+		if linked := trace.SpanContextFromContext(extracted); linked.IsValid() {
+			options = append(options, trace.WithLinks(trace.Link{SpanContext: linked}))
 		}
-		ctx = (propagation.TraceContext{}).Extract(ctx, carrier)
 	}
 	ctx = context.WithValue(ctx, graphTracingKey{}, graphTracing{
 		tracer: tracer, propagateAnnotations: propagateAnnotations,
 	})
-	return tracer.Start(ctx, "graph.reconcile", trace.WithAttributes(
+	options = append(options, trace.WithAttributes(
 		attribute.String("k8s.namespace.name", g.Namespace),
 		attribute.String("k8s.resource.name", g.Name),
 		attribute.String("k8s.resource.uid", string(g.UID)),
 		attribute.Int64("kro.graph.generation", g.Generation),
 		attribute.Bool("kro.graph.deleting", !g.DeletionTimestamp.IsZero()),
 	))
+	return tracer.Start(ctx, "graph.reconcile", options...)
 }
 
 // StartNodeSpan starts a child span during a Graph reconciliation.
@@ -104,10 +116,10 @@ func EndSpan(span trace.Span, err, waiting error, outcome string) {
 	span.End()
 }
 
-// PropagateTraceContext adds node trace context to resource annotations when enabled.
+// InjectContext adds node trace context to resource annotations when enabled.
 // It preserves existing context across retries and when propagation is disabled
 // to avoid metadata changes that would trigger another reconciliation.
-func PropagateTraceContext(ctx context.Context, obj, current *unstructured.Unstructured) {
+func InjectContext(ctx context.Context, obj, current *unstructured.Unstructured) {
 	config, ok := ctx.Value(graphTracingKey{}).(graphTracing)
 	if !ok {
 		return

@@ -60,7 +60,7 @@ func TestGraphTracingPropagation(t *testing.T) {
 	ex := NewSimple(cl)
 	contexts := map[string]string{}
 	for attempt := 0; attempt < 2; attempt++ {
-		ctx, graphSpan := tracing.StartGraphSpan(context.Background(), g, provider.Tracer("test"), true)
+		ctx, graphSpan := tracing.StartReconcileSpan(context.Background(), g, provider.Tracer("test"), true)
 		_, err := ex.Apply(ctx, compileAndBuild(t, g), watchrouter.NoopWatcher{})
 		require.NoError(t, err)
 		graphSpan.End()
@@ -81,7 +81,7 @@ func TestGraphTracingPropagation(t *testing.T) {
 			require.NoError(t, cl.Get(ctx, client.ObjectKey{Namespace: "default", Name: name}, obj))
 			value := obj.GetAnnotations()[tracing.TraceParentAnnotation]
 			require.NotEmpty(t, value)
-			require.Equal(t, "vendor=value", obj.GetAnnotations()[tracing.TraceStateAnnotation])
+			require.Empty(t, obj.GetAnnotations()[tracing.TraceStateAnnotation])
 			if attempt == 0 {
 				contexts[name] = value
 				extracted := (propagation.TraceContext{}).Extract(ctx, propagation.MapCarrier{"traceparent": value})
@@ -100,7 +100,7 @@ func TestGraphTracingPropagation(t *testing.T) {
 	key := client.ObjectKey{Namespace: "default", Name: "cm-alpha"}
 	require.NoError(t, cl.Get(context.Background(), key, obj))
 	require.NoError(t, cl.Delete(context.Background(), obj))
-	ctx, graphSpan := tracing.StartGraphSpan(context.Background(), g, provider.Tracer("test"), true)
+	ctx, graphSpan := tracing.StartReconcileSpan(context.Background(), g, provider.Tracer("test"), true)
 	_, err := ex.Apply(ctx, compileAndBuild(t, g), watchrouter.NoopWatcher{})
 	graphSpan.End()
 	require.NoError(t, err)
@@ -139,7 +139,7 @@ func TestGraphTracingNodeOutcomes(t *testing.T) {
 			recorder := tracetest.NewSpanRecorder()
 			provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder), sdktrace.WithSampler(sdktrace.AlwaysSample()))
 			defer func() { require.NoError(t, provider.Shutdown(context.Background())) }()
-			ctx, graphSpan := tracing.StartGraphSpan(context.Background(), g, provider.Tracer("test"), true)
+			ctx, graphSpan := tracing.StartReconcileSpan(context.Background(), g, provider.Tracer("test"), true)
 			defer graphSpan.End()
 			var cl client.Client = fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
 			if tc.fail {
@@ -195,7 +195,7 @@ func TestGraphTracingAnnotationPropagationDisabled(t *testing.T) {
 	recorder := tracetest.NewSpanRecorder()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder), sdktrace.WithSampler(sdktrace.AlwaysSample()))
 	defer func() { require.NoError(t, provider.Shutdown(context.Background())) }()
-	ctx, graphSpan := tracing.StartGraphSpan(context.Background(), g, provider.Tracer("test"), false)
+	ctx, graphSpan := tracing.StartReconcileSpan(context.Background(), g, provider.Tracer("test"), false)
 	_, err := NewSimple(cl).Apply(ctx, compileAndBuild(t, g), watchrouter.NoopWatcher{})
 	graphSpan.End()
 	require.NoError(t, err)
