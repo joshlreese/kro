@@ -27,6 +27,8 @@ import (
 func TestExampleAndFailedAssertion(t *testing.T) {
 	data, err := os.ReadFile("../../../../examples/testing/observed-deployment.yaml")
 	require.NoError(t, err)
+	graph, err := os.ReadFile("../../../../examples/testing/graphs/deployment.yaml")
+	require.NoError(t, err)
 	for _, tc := range []struct {
 		name    string
 		data    []byte
@@ -39,6 +41,8 @@ func TestExampleAndFailedAssertion(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			filename := filepath.Join(t.TempDir(), "case.yaml")
 			require.NoError(t, os.WriteFile(filename, tc.data, 0600))
+			require.NoError(t, os.Mkdir(filepath.Join(filepath.Dir(filename), "graphs"), 0700))
+			require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(filename), "graphs", "deployment.yaml"), graph, 0600))
 			cmd := NewCommand()
 			var output bytes.Buffer
 			cmd.SetOut(&output)

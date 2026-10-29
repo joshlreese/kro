@@ -1,0 +1,34 @@
+apiVersion: kro.run/v1alpha1
+kind: Graph
+metadata:
+  name: deployment-test
+  namespace: default
+spec:
+  nodes:
+  - id: deployment
+    readyWhen:
+    - ${deployment.status.availableReplicas == 3}
+    template:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: web
+      spec:
+        replicas: 3
+        selector:
+          matchLabels: {app: web}
+        template:
+          metadata:
+            labels: {app: web}
+          spec:
+            containers:
+            - name: web
+              image: nginx:1.29
+  - id: summary
+    template:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: web-summary
+      data:
+        available: ${string(deployment.status.availableReplicas)}

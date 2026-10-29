@@ -46,6 +46,43 @@ exist from the start, including any observed status. Use it for external
 references and patch targets. Supply custom API definitions through `crds`.
 The RGD instance CRD is derived using KRO's existing builder.
 
+To test a project manifest directly, use `graphFile` or `rgdFile` instead of
+embedding the definition. Paths are relative to the test case file, so tests
+work regardless of the directory you run the command from. Absolute paths
+also work. Each referenced file must contain one Graph or RGD manifest.
+
+```yaml
+graphFile: ../graphs/application.yaml
+observations:
+- node: deployment
+  object:
+    status:
+      availableReplicas: 3
+expect:
+  ready: true
+```
+
+For an RGD, keep the test instance alongside the reference:
+
+```yaml
+rgdFile: ../rgds/application.yaml
+instance:
+  apiVersion: kro.run/v1alpha1
+  kind: Application
+  metadata:
+    name: example
+    namespace: default
+  spec:
+    replicas: 3
+expect:
+  ready: true
+```
+
+Provide exactly one of `graph`, `graphFile`, `rgd`, or `rgdFile`. Inline inputs
+remain supported. The Go library can load the same files with
+`tc, err := reconcile.LoadCase("tests/application.yaml")`, then pass `tc.Input`
+to `reconcile.Run`. `Run` itself takes objects and does not read files.
+
 `observations` associates existing state with template nodes. An observation
 appears when its template's identity resolves, before the executor reads the
 resource. Fields from the observation describe existing state; the executor

@@ -16,9 +16,6 @@
 package test
 
 import (
-	"fmt"
-	"os"
-
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/yaml"
 
@@ -33,13 +30,9 @@ func NewCommand() *cobra.Command {
 		Short: "Run one Graph or RGD apply against static resource observations",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			data, err := os.ReadFile(filename)
+			tc, err := reconcile.LoadCase(filename)
 			if err != nil {
 				return err
-			}
-			var tc reconcile.Case
-			if err := yaml.UnmarshalStrict(data, &tc); err != nil {
-				return fmt.Errorf("read test case: %w", err)
 			}
 			result, runErr := reconcile.Run(cmd.Context(), tc.Input)
 			output, err := yaml.Marshal(result)
@@ -59,7 +52,7 @@ func NewCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVarP(&filename, "filename", "f", "",
-		"Test case containing graph or rgd, observations and expectations")
+		"Test case with an inline or file-based Graph or RGD, observations and expectations")
 	_ = cmd.MarkFlagRequired("filename")
 	return cmd
 }

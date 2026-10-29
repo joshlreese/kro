@@ -24,9 +24,12 @@ import (
 )
 
 // Case is a portable test: inputs followed by optional expectations.
+// LoadCase resolves GraphFile or RGDFile into Input before execution.
 type Case struct {
-	Input  `json:",inline"`
-	Expect *Expected `json:"expect,omitempty"`
+	Input     `json:",inline"`
+	Expect    *Expected `json:"expect,omitempty"`
+	GraphFile string    `json:"graphFile,omitempty"`
+	RGDFile   string    `json:"rgdFile,omitempty"`
 }
 
 // Expected checks readiness and resource fields. Extra object fields are
